@@ -309,3 +309,32 @@ test_walker_destroy_zero_value_is_safe :: proc(t: ^testing.T) {
 	_, ok := glob.walker_next(&w)
 	testing.expect(t, !ok)
 }
+
+@(test)
+test_walker_skip_unreadable_dirs :: proc(t: ^testing.T) {
+	root := make_tree(t, {"a/x.odin=", "locked/y.odin=", "z.odin="})
+	defer remove_tree(root)
+	locked := strings.concatenate({root, "/locked"})
+	defer delete(locked)
+	if os.chmod(locked, {}) != nil {
+		return
+	}
+	defer _ = os.chmod(locked, {.Read_User, .Write_User, .Execute_User})
+	if entries, err := os.read_all_directory_by_path(locked, context.allocator); err == nil {
+		// Running as root: permissions don't apply, so there is nothing to test.
+		os.file_info_slice_delete(entries, context.allocator)
+		return
+	}
+
+	track: mem.Tracking_Allocator
+	context.allocator = leak_check_begin(&track)
+	defer leak_check_end(t, &track)
+
+	_, strict := glob.find(root, "**/*.odin")
+	testing.expect(t, strict != nil, "an unreadable directory should fail the walk by default")
+
+	paths, err := glob.find(root, "**/*.odin", {.Skip_Unreadable})
+	testing.expect_value(t, err, nil)
+	defer glob.delete_paths(paths)
+	expect_paths(t, paths, {"a/x.odin", "z.odin"})
+}

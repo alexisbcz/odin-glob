@@ -106,7 +106,7 @@ As in Git, a rule can't include a path again once a rule ignores one of its pare
 
 ## Walking directories
 
-`Walker` visits a tree depth first, with each directory's entries in name order. It never follows symbolic links.
+`Walker` visits a tree depth first, with each directory's entries in name order. It never follows symbolic links. By default a directory that can't be read ends the walk with an error. Pass `.Skip_Unreadable` to leave such directories out and keep going.
 
 ```odin
 w: glob.Walker
@@ -158,7 +158,7 @@ odin run examples/find -- '**/*.odin' .
 
 - Every allocating procedure takes `allocator := context.allocator` and says who owns the result.
 - Fallible procedures return `(T, Error)`. The library never panics on bad input.
-- Matching uses backtracking without allocating. A compiled `Pattern` is read-only, so several threads may share one.
+- Matching never allocates. Runs of `*`, `?`, classes and literals match in time proportional to the pattern length times the path length, so stacked stars such as `*a*a*a*b` stay fast. Braces and `**` backtrack, so a pattern with many of them can still be slow on long paths. A compiled `Pattern` is read-only, so several threads may share one.
 - The package keeps no global mutable state. `Walker` and `Ignore` values are safe to use from one thread at a time.
 
 ## Testing

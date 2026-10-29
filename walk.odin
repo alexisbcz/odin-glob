@@ -14,6 +14,10 @@ Walk_Flag :: enum {
 	// Read the `.gitignore` file in every directory and skip what it ignores.
 	// The `.git` directory is skipped too.
 	Gitignore,
+	// Skip directories below the root that can't be read, for example because
+	// of their permissions, instead of ending the walk with an error. The
+	// directory itself is still yielded. The root must always be readable.
+	Skip_Unreadable,
 }
 
 // Walk_Flags is a set of Walk_Flag values.
@@ -165,7 +169,7 @@ walker_next :: proc(w: ^Walker) -> (entry: Walk_Entry, ok: bool) {
 	if w.pending_dir {
 		w.pending_dir = false
 		if !w.skip_pending {
-			if err := walker_push(w); err != nil {
+			if err := walker_descend(w); err != nil {
 				walker_fail(w, err)
 				return {}, false
 			}
@@ -220,7 +224,7 @@ walker_next :: proc(w: ^Walker) -> (entry: Walk_Entry, ok: bool) {
 			}, true
 		}
 		if descend {
-			if err := walker_push(w); err != nil {
+			if err := walker_descend(w); err != nil {
 				walker_fail(w, err)
 				return {}, false
 			}
@@ -345,6 +349,25 @@ walker_push :: proc(w: ^Walker) -> Error {
 		return err
 	}
 	return nil
+}
+
+/*
+walker_descend pushes the directory named by the current path. With
+Skip_Unreadable, it drops an operating system error and leaves the directory
+unvisited. Allocator errors still end the walk.
+*/
+@(private)
+walker_descend :: proc(w: ^Walker) -> Error {
+	err := walker_push(w)
+	if err == nil || .Skip_Unreadable not_in w.options.flags {
+		return err
+	}
+	if oerr, is_os := err.(os.Error); is_os {
+		if _, is_alloc := oerr.(runtime.Allocator_Error); !is_alloc {
+			return nil
+		}
+	}
+	return err
 }
 
 @(private)
