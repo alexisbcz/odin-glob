@@ -241,3 +241,20 @@ test_ignore_destroy_frees_everything :: proc(t: ^testing.T) {
 	glob.ignore_destroy(&m)
 	testing.expect_value(t, len(m.rules), 0)
 }
+
+// Git skips a UTF-8 byte order mark at the start of a .gitignore file.
+@(test)
+test_gitignore_skips_utf8_bom :: proc(t: ^testing.T) {
+	track: mem.Tracking_Allocator
+	context.allocator = leak_check_begin(&track)
+	defer leak_check_end(t, &track)
+
+	m: glob.Ignore
+	glob.ignore_init(&m)
+	defer glob.ignore_destroy(&m)
+	skipped, err := glob.ignore_add_string(&m, "\xef\xbb\xbfbuild\n*.o\n")
+	testing.expect_value(t, err, nil)
+	testing.expect_value(t, skipped, 0)
+	testing.expect(t, glob.ignore_is_ignored(&m, "build", true))
+	testing.expect(t, glob.ignore_is_ignored(&m, "x.o", false))
+}

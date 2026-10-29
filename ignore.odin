@@ -144,7 +144,8 @@ to report them.
 
 Inputs:
 - m: the matcher.
-- text: the file contents. Both `\n` and `\r\n` line endings work.
+- text: the file contents. Both `\n` and `\r\n` line endings work. A UTF-8
+  byte order mark at the start is skipped, as Git does.
 - base: the directory that holds the file, relative to the root. Use "" for the root.
 
 Returns:
@@ -152,8 +153,8 @@ Returns:
 - err: an allocator error. On error the rules added so far stay in place.
 */
 ignore_add_string :: proc(m: ^Ignore, text: string, base := "") -> (skipped: int, err: Error) {
-	text := text
-	for line in strings.split_lines_iterator(&text) {
+	rest := strings.trim_prefix(text, UTF8_BOM)
+	for line in strings.split_lines_iterator(&rest) {
 		lerr := ignore_add_pattern(m, line, base)
 		switch e in lerr {
 		case Pattern_Error:
@@ -229,6 +230,9 @@ ignore_is_ignored :: proc(m: ^Ignore, path: string, is_dir: bool) -> bool {
 	}
 	return ignore_match(m, clean, is_dir) == .Ignored
 }
+
+@(private)
+UTF8_BOM :: "\xef\xbb\xbf"
 
 @(private)
 relative_to_base :: proc(path, base: string) -> (rel: string, ok: bool) {
