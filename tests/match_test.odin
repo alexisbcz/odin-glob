@@ -330,3 +330,17 @@ test_many_stars_still_terminate :: proc(t: ^testing.T) {
 	expect_match(t, "*a*a*a*b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)
 	expect_match(t, "**/**/**/x", "a/b/c/d/e/f/g/h/i/j/x", true)
 }
+
+// `src/{a,**}/x` must mean `src/a/x` or `src/**/x`, and the second matches `src/x`.
+@(test)
+test_globstar_alternative_matches_zero_segments :: proc(t: ^testing.T) {
+	expect_match(t, "src/{a,**}/x", "src/x", true)
+	expect_match(t, "src/{a,**}/x", "src/a/x", true)
+	expect_match(t, "src/{a,**}/x", "src/p/q/x", true)
+	expect_match(t, "src/{a,**}/x", "srcx", false)
+	expect_match(t, "src/{a,**}/x", "src/xx", false)
+	expect_match(t, "{**}/x", "x", true)
+	expect_match(t, "{**}/x", "p/x", true)
+	expect_match(t, "{b,{**}}/x", "x", true)
+	expect_match(t, "{**}/{x,y}", "y", true)
+}

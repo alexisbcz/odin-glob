@@ -127,6 +127,9 @@ Class_Item :: struct {
 Node :: struct {
 	kind:         Node_Kind,
 	negated:      bool,
+	// segment marks a `**` that ends a brace alternative at the start of a
+	// segment, as in `{a,**}/x`. Like `**/`, it may also match zero segments.
+	segment:      bool,
 	literal:      string,
 	items:        []Class_Item,
 	alternatives: [][]Node,
@@ -401,7 +404,8 @@ parse_sequence :: proc(
 					kind = .Globstar_Suffix
 				}
 				flush_literal(p, &nodes, &lit) or_return
-				append(&nodes, Node{kind = kind}) or_return
+				segment := kind == .Globstar_Any && end < len(p.src) && p.src[end] != '/'
+				append(&nodes, Node{kind = kind, segment = segment}) or_return
 			} else {
 				flush_literal(p, &nodes, &lit) or_return
 				if len(nodes) == 0 || nodes[len(nodes) - 1].kind != .Star {
@@ -700,7 +704,10 @@ match_nodes :: proc(m: ^Matcher, nodes: []Node, next: ^Continuation, s: string) 
 			return match_any_tail(m, rest, next, s, 1)
 
 		case .Globstar_Any:
-			return match_any_tail(m, rest, next, s, 0)
+			if match_any_tail(m, rest, next, s, 0) {
+				return true
+			}
+			return n.segment && len(rest) == 0 && match_without_slash(m, next, s)
 
 		case .Alternation:
 			cont := Continuation{rest, next}
@@ -717,6 +724,27 @@ match_nodes :: proc(m: ^Matcher, nodes: []Node, next: ^Continuation, s: string) 
 		return match_nodes(m, next.nodes, next.next, s)
 	}
 	return s == ""
+}
+
+// match_without_slash matches the continuation with the `/` that starts it
+// removed. It lets a `**` that ends a brace alternative, as in `{a,**}/x`,
+// match zero segments, the way `**/x` matches `x`.
+@(private)
+match_without_slash :: proc(m: ^Matcher, next: ^Continuation, s: string) -> bool {
+	c := next
+	for c != nil && len(c.nodes) == 0 {
+		c = c.next
+	}
+	if c == nil {
+		return false
+	}
+	first := &c.nodes[0]
+	if first.kind != .Literal || !strings.has_prefix(first.literal, "/") {
+		return false
+	}
+	head := [1]Node{{kind = .Literal, literal = first.literal[1:]}}
+	after := Continuation{c.nodes[1:], c.next}
+	return match_nodes(m, head[:], &after, s)
 }
 
 /*
