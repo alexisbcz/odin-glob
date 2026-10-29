@@ -384,7 +384,11 @@ parse_sequence :: proc(
 			if stars >= 2 && at_segment_start && next_is_boundary {
 				if end < len(p.src) && p.src[end] == '/' {
 					flush_literal(p, &nodes, &lit) or_return
-					append(&nodes, Node{kind = .Globstar_Prefix}) or_return
+					// `**/**/` matches the same paths as `**/`, so keep one node.
+					// Repeated nodes would make matching polynomial in their count.
+					if len(nodes) == 0 || nodes[len(nodes) - 1].kind != .Globstar_Prefix {
+						append(&nodes, Node{kind = .Globstar_Prefix}) or_return
+					}
 					p.pos = end + 1
 					at_segment_start = true
 					continue loop
@@ -621,6 +625,9 @@ Continuation :: struct {
 
 @(private)
 match_nodes :: proc(m: ^Matcher, nodes: []Node, next: ^Continuation, s: string) -> bool {
+	if is_star_chain(nodes, next) {
+		return match_star_chain(m, nodes, next, s)
+	}
 	nodes, s := nodes, s
 	for len(nodes) > 0 {
 		n := &nodes[0]
@@ -710,6 +717,105 @@ match_nodes :: proc(m: ^Matcher, nodes: []Node, next: ^Continuation, s: string) 
 		return match_nodes(m, next.nodes, next.next, s)
 	}
 	return s == ""
+}
+
+/*
+is_star_chain reports whether `nodes` and every continuation after them hold
+only stars, literals, `?` and classes, with at least one star.
+*/
+@(private)
+is_star_chain :: proc(nodes: []Node, next: ^Continuation) -> bool {
+	has_star := false
+	ns, c := nodes, next
+	for {
+		for &n in ns {
+			#partial switch n.kind {
+			case .Star:
+				has_star = true
+			case .Literal, .Any_Char, .Class:
+			case:
+				return false
+			}
+		}
+		if c == nil {
+			return has_star
+		}
+		ns, c = c.nodes, c.next
+	}
+}
+
+@(private)
+Chain_Cursor :: struct {
+	nodes: []Node,
+	index: int,
+	next:  ^Continuation,
+}
+
+/*
+match_star_chain matches a sequence that is_star_chain accepted, in time
+proportional to len(nodes) * len(s).
+
+When a match fails it only goes back to the most recent star and lets that star
+take one more character. Earlier stars never need to take more: whatever they
+could absorb, the later star can absorb as well. A star can't take a `/`, and
+when the most recent star reaches one, no earlier star can help either, because
+it would have to take that `/` itself.
+*/
+@(private)
+match_star_chain :: proc(m: ^Matcher, nodes: []Node, next: ^Continuation, s: string) -> bool {
+	cur := Chain_Cursor{nodes, 0, next}
+	si := 0
+	restart: Chain_Cursor
+	restart_si := -1
+	for {
+		for cur.index >= len(cur.nodes) && cur.next != nil {
+			cur = {cur.next.nodes, 0, cur.next.next}
+		}
+		if cur.index < len(cur.nodes) {
+			n := &cur.nodes[cur.index]
+			#partial switch n.kind {
+			case .Star:
+				restart = cur
+				restart_si = -1
+				if si < len(s) && s[si] != '/' {
+					_, w := utf8.decode_rune(s[si:])
+					restart_si = si + w
+				}
+				cur.index += 1
+				continue
+			case .Literal:
+				ok, remaining, exhausted := match_literal(n.literal, s[si:], m.fold)
+				if exhausted && m.prefix {
+					return true
+				}
+				if ok {
+					si = len(s) - len(remaining)
+					cur.index += 1
+					continue
+				}
+			case .Any_Char, .Class:
+				if si >= len(s) {
+					if m.prefix {
+						return true
+					}
+				} else {
+					r, w := utf8.decode_rune(s[si:])
+					if r != '/' && (n.kind == .Any_Char || class_matches(n, r, m.fold) != n.negated) {
+						si += w
+						cur.index += 1
+						continue
+					}
+				}
+			}
+		} else if si == len(s) {
+			return true
+		}
+		if restart_si < 0 {
+			return false
+		}
+		cur = restart
+		si = restart_si
+	}
 }
 
 // match_any_tail tries every rune boundary of `s` from byte `start` onwards.
